@@ -49,27 +49,32 @@ const APP_BUG_MIN_CLUSTERS = 2
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
-function generateId(category: InsightCategory, ...parts: string[]): string {
+/** @internal Exported for testing */
+export function generateId(category: InsightCategory, ...parts: string[]): string {
   return `${category}:${parts.join(':')}`
 }
 
-function now(): string {
+/** @internal Exported for testing */
+export function now(): string {
   return new Date().toISOString()
 }
 
-function parseTimestamp(ts?: string): number {
+/** @internal Exported for testing */
+export function parseTimestamp(ts?: string): number {
   if (!ts) return 0
   return new Date(ts).getTime()
 }
 
-function pct(value: number | undefined, total: number | undefined): number {
+/** @internal Exported for testing */
+export function pct(value: number | undefined, total: number | undefined): number {
   if (!value || !total || total === 0) return 0
   return Math.round((value / total) * 100)
 }
 
 // ── Algorithm 1: Event Correlations ───────────────────────────────────
 
-function detectEventCorrelations(events: ClusterEvent[]): MultiClusterInsight[] {
+/** @internal Exported for testing */
+export function detectEventCorrelations(events: ClusterEvent[]): MultiClusterInsight[] {
   const warnings = (events || []).filter(e => e.type === 'Warning' && e.cluster && e.lastSeen)
   if (warnings.length === 0) return []
 
@@ -115,7 +120,8 @@ function detectEventCorrelations(events: ClusterEvent[]): MultiClusterInsight[] 
 
 // ── Algorithm 2: Cluster Deltas ───────────────────────────────────────
 
-function detectClusterDeltas(
+/** @internal Exported for testing */
+export function detectClusterDeltas(
   deployments: Deployment[],
   clusters: ClusterInfo[],
 ): MultiClusterInsight[] {
@@ -203,7 +209,8 @@ function detectClusterDeltas(
 
 // ── Algorithm 3: Cascade Impact ───────────────────────────────────────
 
-function detectCascadeImpact(events: ClusterEvent[]): MultiClusterInsight[] {
+/** @internal Exported for testing */
+export function detectCascadeImpact(events: ClusterEvent[]): MultiClusterInsight[] {
   const warnings = (events || [])
     .filter(e => e.type === 'Warning' && e.cluster && e.lastSeen)
     .sort((a, b) => parseTimestamp(a.lastSeen) - parseTimestamp(b.lastSeen))
@@ -265,7 +272,8 @@ function detectCascadeImpact(events: ClusterEvent[]): MultiClusterInsight[] {
 
 // ── Algorithm 4: Config Drift ─────────────────────────────────────────
 
-function detectConfigDrift(deployments: Deployment[]): MultiClusterInsight[] {
+/** @internal Exported for testing */
+export function detectConfigDrift(deployments: Deployment[]): MultiClusterInsight[] {
   if ((deployments || []).length === 0) return []
 
   // Group by name+namespace
@@ -310,7 +318,8 @@ function detectConfigDrift(deployments: Deployment[]): MultiClusterInsight[] {
 
 // ── Algorithm 5: Resource Imbalance ───────────────────────────────────
 
-function detectResourceImbalance(clusters: ClusterInfo[]): MultiClusterInsight[] {
+/** @internal Exported for testing */
+export function detectResourceImbalance(clusters: ClusterInfo[]): MultiClusterInsight[] {
   const healthy = (clusters || []).filter(c => c.healthy !== false && c.cpuCores && c.cpuCores > 0)
   if (healthy.length < 2) return []
 
@@ -386,7 +395,8 @@ function detectResourceImbalance(clusters: ClusterInfo[]): MultiClusterInsight[]
 
 // ── Algorithm 6: Restart Correlation ──────────────────────────────────
 
-function detectRestartCorrelation(podIssues: PodIssue[]): MultiClusterInsight[] {
+/** @internal Exported for testing */
+export function detectRestartCorrelation(podIssues: PodIssue[]): MultiClusterInsight[] {
   const issues = (podIssues || []).filter(p => p.restarts >= RESTART_CORRELATION_THRESHOLD && p.cluster)
   if (issues.length === 0) return []
 
@@ -457,7 +467,8 @@ function detectRestartCorrelation(podIssues: PodIssue[]): MultiClusterInsight[] 
 
 // ── Algorithm 7: Rollout Tracking ─────────────────────────────────────
 
-function trackRolloutProgress(deployments: Deployment[]): MultiClusterInsight[] {
+/** @internal Exported for testing */
+export function trackRolloutProgress(deployments: Deployment[]): MultiClusterInsight[] {
   if ((deployments || []).length === 0) return []
 
   // Group by name+namespace
