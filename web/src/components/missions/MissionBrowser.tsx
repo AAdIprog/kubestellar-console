@@ -292,7 +292,7 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
     updateRecommendations()
     missionCache.listeners.add(updateRecommendations)
     return () => { missionCache.listeners.delete(updateRecommendations) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [isOpen])
 
   // ============================================================================
