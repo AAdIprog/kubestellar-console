@@ -329,6 +329,8 @@ export function useCardSort<T, S extends string>(
 export interface UseCardDataResult<T, S extends string> {
   /** Final processed items (filtered, sorted, paginated) */
   items: T[]
+  /** All items after filtering and sorting, before pagination */
+  allFilteredItems: T[]
   /** Total items before pagination */
   totalItems: number
   /** Current page */
@@ -376,17 +378,21 @@ export function useCardData<T, S extends string = string>(
   const totalPages = Math.ceil(sorted.length / effectivePerPage) || 1
   const needsPagination = itemsPerPage !== 'unlimited' && sorted.length > effectivePerPage
 
-  // Reset page when filters change (but not on sort — sorting preserves page position)
+  // Reset page when filter inputs change (but not on data updates or sort changes).
+  // Previously included `filtered` in deps, which caused page resets on progressive
+  // data loading (e.g., per-cluster OPA checks updating statuses) (#5664).
   useEffect(() => {
     setCurrentPage(1)
   }, [filterResult.search, filterResult.localClusterFilter])
 
-  // Ensure current page is valid
+  // Ensure current page is valid when total pages shrinks (e.g., data errors).
+  // Only depend on totalPages — including currentPage causes an infinite loop
+  // when totalPages=0 because Math.max(1,0)=1 and 1>0 is always true (#5762).
   useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(Math.max(1, totalPages))
+    if (totalPages > 0 && currentPage > totalPages) {
+      setCurrentPage(totalPages)
     }
-  }, [currentPage, totalPages])
+  }, [totalPages]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Paginate
   const paginatedItems = (() => {
@@ -409,6 +415,8 @@ export function useCardData<T, S extends string = string>(
 
   return {
     items: paginatedItems,
+    /** All items after filtering and sorting, before pagination */
+    allFilteredItems: sorted,
     totalItems: sorted.length,
     currentPage,
     totalPages,

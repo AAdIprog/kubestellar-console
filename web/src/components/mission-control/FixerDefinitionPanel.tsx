@@ -70,8 +70,7 @@ export function FixerDefinitionPanel({
   }, [])
 
   const handleSubmit = () => {
-    if (!state.description.trim()) return
-    if (!state.title) {
+    if (!state.title && state.description.trim()) {
       const firstSentence = state.description.split(/[.!?\n]/)[0].trim()
       onTitleChange(firstSentence.slice(0, 60))
     }
@@ -238,7 +237,7 @@ export function FixerDefinitionPanel({
                 variant="primary"
                 size="sm"
                 onClick={handleSubmit}
-                disabled={!state.description.trim() || aiStreaming}
+                disabled={aiStreaming}
                 className="h-7 px-3"
                 icon={
                   aiStreaming ? (
@@ -941,7 +940,7 @@ function TargetClusterSelector({
   const isAllSelected = selected.length === 0 || selected.length === clusters.length
 
   return (
-    <div ref={ref} className="relative z-10">
+    <div ref={ref} className="relative z-20">
       <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
         Target Clusters
       </label>
@@ -999,7 +998,7 @@ function TargetClusterSelector({
 
       {/* Dropdown */}
       {isOpen && (
-        <div className="absolute z-50 mt-1 w-64 max-h-48 overflow-y-auto rounded-lg border border-border bg-popover shadow-lg">
+        <div className="absolute z-dropdown mt-1 w-64 max-h-48 overflow-y-auto rounded-lg border border-border bg-popover shadow-lg">
           {/* All clusters toggle */}
           <button
             type="button"

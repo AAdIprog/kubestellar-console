@@ -274,15 +274,15 @@ describe('startMission', () => {
     expect(result.current.missions[0].status).toBe('waiting_input')
   })
 
-  it('calls emitMissionCompleted when stream done:true is received', async () => {
+  it('calls emitMissionCompleted when result message is received', async () => {
     const { result } = renderHook(() => useMissions(), { wrapper })
     const { requestId } = await startMissionWithConnection(result)
 
     act(() => {
       MockWebSocket.lastInstance?.simulateMessage({
         id: requestId,
-        type: 'stream',
-        payload: { content: '', done: true },
+        type: 'result',
+        payload: { content: 'Task completed.' },
       })
     })
 
@@ -393,7 +393,16 @@ describe('startMission', () => {
 describe('sendMessage', () => {
   it('appends a user message to the correct mission', async () => {
     const { result } = renderHook(() => useMissions(), { wrapper })
-    const { missionId } = await startMissionWithConnection(result)
+    const { missionId, requestId } = await startMissionWithConnection(result)
+
+    // Transition to waiting_input so sendMessage is not blocked (#5478 guard)
+    act(() => {
+      MockWebSocket.lastInstance?.simulateMessage({
+        id: requestId,
+        type: 'stream',
+        payload: { content: '', done: true },
+      })
+    })
 
     act(() => {
       result.current.sendMessage(missionId, 'follow-up question')
@@ -407,7 +416,17 @@ describe('sendMessage', () => {
 
   it('sends the message payload over the WebSocket', async () => {
     const { result } = renderHook(() => useMissions(), { wrapper })
-    const { missionId } = await startMissionWithConnection(result)
+    const { missionId, requestId } = await startMissionWithConnection(result)
+
+    // Transition to waiting_input so sendMessage is not blocked (#5478 guard)
+    act(() => {
+      MockWebSocket.lastInstance?.simulateMessage({
+        id: requestId,
+        type: 'stream',
+        payload: { content: '', done: true },
+      })
+    })
+
     const beforeCallCount = MockWebSocket.lastInstance!.send.mock.calls.length
 
     await act(async () => {
@@ -804,11 +823,11 @@ describe('demo mode', () => {
     expect(MockWebSocket.lastInstance).toBeNull()
   })
 
-  it('returns empty missions initially when localStorage has no data', () => {
+  it('returns pre-populated demo missions when localStorage has no data', () => {
     vi.mocked(getDemoMode).mockReturnValue(true)
     const { result } = renderHook(() => useMissions(), { wrapper })
-    // No missions are in localStorage — provider starts with []
-    expect(result.current.missions).toHaveLength(0)
+    // Demo mode seeds with pre-populated missions so the feature is visible
+    expect(result.current.missions.length).toBeGreaterThan(0)
   })
 
   it('startMission in demo mode transitions mission to failed (no agent)', async () => {
@@ -1092,8 +1111,7 @@ describe('localStorage quota handling', () => {
 
     // Should log the inner retry error (not silently swallow it)
     expect(errorSpy).toHaveBeenCalledWith(
-      '[Missions] localStorage still full after pruning, clearing missions',
-      expect.any(DOMException),
+      '[Missions] localStorage still full after stripping messages, clearing missions',
     )
 
     // Storage should have been cleared as a last resort
@@ -2358,6 +2376,44 @@ describe('mission timeout interval', () => {
     }
   })
 
+  it('progress events reset inactivity timer so long-running tools do not timeout', async () => {
+    vi.useFakeTimers()
+    try {
+      const { result } = renderHook(() => useMissions(), { wrapper })
+      const { missionId, requestId } = await startMissionWithConnection(result)
+
+      // Send a stream chunk to start tracking inactivity
+      act(() => {
+        MockWebSocket.lastInstance?.simulateMessage({
+          id: requestId,
+          type: 'stream',
+          payload: { content: 'Installing Drasi...', done: false },
+        })
+      })
+
+      // Advance 60s — within 90s window, still alive
+      act(() => { vi.advanceTimersByTime(60_000) })
+
+      // Send a progress event (heartbeat from tool execution)
+      act(() => {
+        MockWebSocket.lastInstance?.simulateMessage({
+          id: requestId,
+          type: 'progress',
+          payload: { step: 'Still working...' },
+        })
+      })
+
+      // Advance another 60s — 120s total, but only 60s since last progress event
+      act(() => { vi.advanceTimersByTime(60_000) })
+
+      // Mission should still be running (progress reset the timer)
+      const mission = result.current.missions.find(m => m.id === missionId)
+      expect(mission?.status).toBe('running')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not fire timeout when no running missions exist', async () => {
     vi.useFakeTimers()
     try {
@@ -2445,7 +2501,7 @@ describe('WS close fails pending running missions', () => {
     const mission = result.current.missions.find(m => m.id === missionId)
     expect(mission?.status).toBe('failed')
     const systemMsg = mission?.messages.find(m => m.role === 'system')
-    expect(systemMsg?.content).toContain('Local Agent Not Connected')
+    expect(systemMsg?.content).toContain('Agent Disconnected')
   })
 })
 
@@ -3739,7 +3795,7 @@ describe('status step transitions during mission execution', () => {
 // ── emitMissionCompleted on stream done vs result ───────────────────────────
 
 describe('analytics: emitMissionCompleted timing', () => {
-  it('emits completion analytics on stream done when mission is running', async () => {
+  it('emits completion analytics on result message when mission is running', async () => {
     vi.mocked(emitMissionCompleted).mockClear()
 
     const { result } = renderHook(() => useMissions(), { wrapper })
@@ -3748,8 +3804,8 @@ describe('analytics: emitMissionCompleted timing', () => {
     act(() => {
       MockWebSocket.lastInstance?.simulateMessage({
         id: requestId,
-        type: 'stream',
-        payload: { content: '', done: true },
+        type: 'result',
+        payload: { content: 'All done' },
       })
     })
 

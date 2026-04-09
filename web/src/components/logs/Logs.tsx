@@ -53,7 +53,8 @@ export function Logs() {
   const currentWarningCount = filteredWarningEvents.length
   const currentNormalCount = filteredEvents.filter(e => e.type === 'Normal').length
   const currentErrorCount = filteredEvents.filter(e =>
-    e.type === 'Warning' && (e.reason?.toLowerCase().includes('error') || e.reason?.toLowerCase().includes('failed'))
+    e.type === 'Error' ||
+    (e.type === 'Warning' && (e.reason?.toLowerCase().includes('error') || e.reason?.toLowerCase().includes('failed')))
   ).length
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
   const currentRecentCount = filteredEvents.filter(e => {
@@ -119,7 +120,7 @@ export function Logs() {
       isLoading={isLoading}
       isRefreshing={isRefreshing}
       lastUpdated={lastUpdated}
-      hasData={reachableClusters.length > 0}
+      hasData={reachableClusters.length > 0 || filteredEvents.length > 0}
       emptyState={{
         title: 'Logs & Events Dashboard',
         description: 'Add cards to monitor Kubernetes events, application logs, and system messages across your clusters.' }}

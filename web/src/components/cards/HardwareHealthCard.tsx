@@ -427,12 +427,13 @@ export function HardwareHealthCard() {
   const currentNeedsPagination = viewMode === 'alerts' ? needsPagination : inventoryNeedsPagination
   const currentTotalItems = viewMode === 'alerts' ? sortedAlerts.length : sortedInventory.length
 
-  // Ensure current page is valid for current view
+  // Ensure current page is valid for current view (#5762).
+  // Only depend on currentTotalPages — including currentPage risks infinite loop.
   useEffect(() => {
-    if (currentPage > currentTotalPages) {
-      setCurrentPage(Math.max(1, currentTotalPages))
+    if (currentTotalPages > 0 && currentPage > currentTotalPages) {
+      setCurrentPage(currentTotalPages)
     }
-  }, [currentPage, currentTotalPages])
+  }, [currentTotalPages]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Auto-dismiss delay for alert clear error messages */
   const CLEAR_ERROR_DISMISS_MS = 5000
@@ -456,8 +457,8 @@ export function HardwareHealthCard() {
         <div className={cn(
           'p-2 rounded-lg border',
           criticalCount > 0
-            ? 'bg-red-500/20 border-red-500/30'
-            : 'bg-green-500/20 border-green-500/30'
+            ? 'bg-red-500/20 border-red-500/20'
+            : 'bg-green-500/20 border-green-500/20'
         )}>
           <div className="text-xl font-bold text-foreground">{criticalCount}</div>
           <div className={cn('text-2xs', criticalCount > 0 ? 'text-red-400' : 'text-green-400')}>
@@ -467,8 +468,8 @@ export function HardwareHealthCard() {
         <div className={cn(
           'p-2 rounded-lg border',
           warningCount > 0
-            ? 'bg-yellow-500/20 border-yellow-500/30'
-            : 'bg-green-500/20 border-green-500/30'
+            ? 'bg-yellow-500/20 border-yellow-500/20'
+            : 'bg-green-500/20 border-green-500/20'
         )}>
           <div className="text-xl font-bold text-foreground">{warningCount}</div>
           <div className={cn('text-2xs', warningCount > 0 ? 'text-yellow-400' : 'text-green-400')}>

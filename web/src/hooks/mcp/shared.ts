@@ -39,6 +39,22 @@ export const MIN_REFRESH_INDICATOR_MS = 500
 // Re-export for backward compatibility
 export const LOCAL_AGENT_URL = LOCAL_AGENT_HTTP_URL
 
+/**
+ * Drop-in replacement for `fetch()` that auto-injects the KC_AGENT_TOKEN
+ * Authorization header when calling the kc-agent HTTP API. Without this,
+ * requests to kc-agent are rejected when KC_AGENT_TOKEN is configured.
+ */
+export function agentFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const token = localStorage.getItem(STORAGE_KEY_TOKEN)
+  const headers = new Headers(init?.headers)
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+  // Use caller-provided signal, or fall back to a default timeout
+  const signal = init?.signal ?? AbortSignal.timeout(MCP_HOOK_TIMEOUT_MS)
+  return fetch(input, { ...init, headers, signal })
+}
+
 // ============================================================================
 // Shared Cluster State - ensures all useClusters() consumers see the same data
 // ============================================================================
@@ -182,11 +198,12 @@ function mergeWithStoredClusters(newClusters: ClusterInfo[]): ClusterInfo[] {
   return newClusters.map(cluster => {
     const cached = storedMap.get(cluster.name)
     if (cached) {
-      // Helper: use new value only if it's a positive number, else use cached
+      // Helper: prefer new value when defined (including zero); only fall back
+      // to cached when the new value is truly missing (undefined).
+      // A legitimate zero (e.g. cluster scaled to 0 pods) must be respected.
       const pickMetric = (newVal: number | undefined, cachedVal: number | undefined) => {
-        if (newVal !== undefined && newVal > 0) return newVal
-        if (cachedVal !== undefined && cachedVal > 0) return cachedVal
-        return newVal // fallback to new value (could be 0 or undefined)
+        if (newVal !== undefined) return newVal
+        return cachedVal
       }
 
       // Merge: use new data but preserve cached metrics if new data is missing/zero
@@ -238,6 +255,33 @@ export const clusterSubscribers = new Set<ClusterSubscriber>()
 // Notify all subscribers of state change
 export function notifyClusterSubscribers() {
   clusterSubscribers.forEach(subscriber => subscriber(clusterCache))
+}
+
+/**
+ * Clear all cluster caches on logout so data from a previous user session
+ * does not leak to the next login (#5405). Clears both localStorage keys
+ * and the module-level in-memory cache, then notifies subscribers so the
+ * UI resets to a loading/empty state.
+ */
+export function clearClusterCacheOnLogout(): void {
+  try {
+    localStorage.removeItem(CLUSTER_CACHE_KEY)
+    localStorage.removeItem(CLUSTER_DIST_CACHE_KEY)
+  } catch {
+    // Ignore storage errors
+  }
+
+  clusterCache = {
+    clusters: [],
+    lastUpdated: null,
+    isLoading: true,
+    isRefreshing: false,
+    error: null,
+    consecutiveFailures: 0,
+    isFailed: false,
+    lastRefresh: null,
+  }
+  notifyClusterSubscribers()
 }
 
 // ============================================================================
@@ -565,24 +609,11 @@ export function updateSingleClusterInCache(clusterName: string, updates: Partial
         return
       }
 
-      // For numeric metrics, preserve positive cached values when new value is 0
-      const metricsKeys = ['cpuCores', 'memoryBytes', 'memoryGB', 'storageBytes', 'storageGB', 'cpuRequestsMillicores', 'cpuRequestsCores', 'memoryRequestsBytes', 'memoryRequestsGB', 'cpuUsageMillicores', 'cpuUsageCores', 'memoryUsageBytes', 'memoryUsageGB']
-      if (metricsKeys.includes(key) && typeof value === 'number' && value === 0) {
-        // Keep existing positive value if available
-        const existingValue = c[key as keyof ClusterInfo]
-        if (typeof existingValue === 'number' && existingValue > 0) {
-          return // Skip, keep existing positive value
-        }
-      }
-
-      // Don't set reachable to false if we have valid cached node data
-      // This prevents transient health check failures from immediately marking clusters as offline
-      if (key === 'reachable' && value === false) {
-        const hasValidCachedData = typeof c.nodeCount === 'number' && c.nodeCount > 0
-        if (hasValidCachedData) {
-          return // Skip, keep cluster reachable since we have valid data
-        }
-      }
+      // For numeric metrics, only fall back to cached when new value is undefined.
+      // A real zero (e.g. scaled-to-zero) must be respected — see #5443.
+      // NOTE: reachability (key === 'reachable') is no longer blocked by cached
+      // node data — the useMCP hook already gates reachable=false behind 5 minutes
+      // of consecutive failures, so the value is authoritative — see #5444.
 
       // Apply the update
       (merged as Record<string, unknown>)[key] = value
@@ -682,6 +713,12 @@ export function connectSharedWebSocket() {
     const ws = new WebSocket(wsUrl)
 
     ws.onopen = () => {
+      // Guard against race condition where onclose fires before onopen
+      // (observed in Safari and during rapid reconnection cycles).
+      // ws.readyState may no longer be OPEN by the time this handler runs.
+      if (ws.readyState !== WebSocket.OPEN) {
+        return
+      }
       // Send authentication message - backend requires this within 5 seconds
       const token = localStorage.getItem(STORAGE_KEY_TOKEN)
       if (token) {
@@ -790,7 +827,7 @@ async function fetchClusterListFromAgent(): Promise<ClusterInfo[] | null> {
   try {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), MCP_PROBE_TIMEOUT_MS)
-    const response = await fetch(`${LOCAL_AGENT_URL}/clusters`, {
+    const response = await agentFetch(`${LOCAL_AGENT_URL}/clusters`, {
       signal: controller.signal,
     })
     clearTimeout(timeoutId)
@@ -862,7 +899,7 @@ export async function fetchSingleClusterHealth(clusterName: string, kubectlConte
       const context = kubectlContext || clusterName
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), MCP_HOOK_TIMEOUT_MS)
-      const response = await fetch(`${LOCAL_AGENT_URL}/cluster-health?cluster=${encodeURIComponent(context)}`, {
+      const response = await agentFetch(`${LOCAL_AGENT_URL}/cluster-health?cluster=${encodeURIComponent(context)}`, {
         signal: controller.signal,
         headers: { 'Accept': 'application/json' },
       })

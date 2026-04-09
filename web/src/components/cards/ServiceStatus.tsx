@@ -100,6 +100,7 @@ export function ServiceStatus() {
     },
     containerRef,
     containerStyle,
+    allFilteredItems,
   } = useCardData<Service, SortByOption>(services, {
     filter: {
       searchFields: ['name', 'namespace', 'type'],
@@ -119,12 +120,13 @@ export function ServiceStatus() {
     defaultLimit: 10,
   })
 
-  // Stats - use totalItems from the hook (filtered count before pagination)
+  // Stats — compute from allFilteredItems so type counts reflect all active
+  // filters (global cluster, local cluster, search) and match totalItems (#5775)
   const stats = {
     total: totalItems,
-    loadBalancer: services.filter(s => s.type === 'LoadBalancer').length,
-    nodePort: services.filter(s => s.type === 'NodePort').length,
-    clusterIP: services.filter(s => s.type === 'ClusterIP').length,
+    loadBalancer: allFilteredItems.filter(s => s.type === 'LoadBalancer').length,
+    nodePort: allFilteredItems.filter(s => s.type === 'NodePort').length,
+    clusterIP: allFilteredItems.filter(s => s.type === 'ClusterIP').length,
   }
 
   if (showSkeleton) {
@@ -215,7 +217,7 @@ export function ServiceStatus() {
       <div ref={containerRef} className="flex-1 space-y-1.5 overflow-y-auto" style={containerStyle}>
         {displayServices.length === 0 ? (
           <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-            {error ? 'Failed to load services' : searchQuery ? 'No matching services' : 'No services found'}
+            {error ? t('serviceStatus.loadError', 'Failed to load services') : searchQuery ? t('serviceStatus.noMatch', 'No matching services') : t('serviceStatus.noServices', 'No services found')}
           </div>
         ) : (
           displayServices.map(service => (

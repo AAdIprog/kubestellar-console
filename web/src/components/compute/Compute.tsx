@@ -9,11 +9,22 @@ import { useUniversalStats, createMergedStatValueGetter } from '../../hooks/useU
 import { StatBlockValue } from '../ui/StatsOverview'
 import { DashboardPage } from '../../lib/dashboards/DashboardPage'
 import { getDefaultCards } from '../../config/dashboards'
+import { ensureCardInDashboard } from '../../lib/dashboards/migrateStorageKey'
 import { RotatingTip } from '../ui/RotatingTip'
 import { ROUTES } from '../../config/routes'
 import { useTranslation } from 'react-i18next'
 
 const COMPUTE_CARDS_KEY = 'kubestellar-compute-cards'
+
+// Ensure new virtualization cards are present in existing saved layouts
+ensureCardInDashboard(COMPUTE_CARDS_KEY, 'vcluster_status', {
+  id: 'compute-6',
+  cardType: 'vcluster_status',
+  position: { w: 6, h: 3, x: 0, y: 6 } })
+ensureCardInDashboard(COMPUTE_CARDS_KEY, 'kubevirt_status', {
+  id: 'compute-7',
+  cardType: 'kubevirt_status',
+  position: { w: 6, h: 3, x: 6, y: 6 } })
 
 // Default cards for the compute dashboard
 const DEFAULT_COMPUTE_CARDS = getDefaultCards('compute')
@@ -46,10 +57,12 @@ export function Compute() {
     }
   }, [searchParams, setSearchParams, location.pathname])
 
-  // Trigger refresh when navigating to this page (location.key changes on each navigation)
+  // Trigger refresh only when navigating TO this page (not on every navigation event)
   useEffect(() => {
-    refetch()
-  }, [location.key]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (location.pathname === '/compute') {
+      refetch()
+    }
+  }, [location.key, location.pathname]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Filter clusters based on global selection
   const filteredClusters = clusters.filter(c =>
@@ -161,7 +174,7 @@ export function Compute() {
 
   const handleCompare = () => {
     if (selectedForComparison.length >= 2) {
-      navigate(`${ROUTES.COMPUTE_COMPARE}?clusters=${selectedForComparison.join(',')}`)
+      navigate(`${ROUTES.COMPUTE_COMPARE}?clusters=${selectedForComparison.map(encodeURIComponent).join(',')}`)
     }
   }
 

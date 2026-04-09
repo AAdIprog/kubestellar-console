@@ -9,6 +9,8 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { useMissions } from '../../hooks/useMissions'
 import { useHelmReleases } from '../../hooks/mcp/helm'
 import { useClusters } from '../../hooks/mcp/clusters'
+import { isDemoMode } from '../../lib/demoMode'
+import { getDemoMissionControlState } from './demoState'
 import type {
   MissionControlState,
   PayloadProject,
@@ -34,19 +36,34 @@ interface PersistedStateEntry {
 function loadPersistedState(): Partial<MissionControlState> | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY) // TTL validation applied below via WIZARD_STATE_TTL_MS
-    if (!raw) return null
+    if (!raw) {
+      // In demo mode, seed with a pre-populated Mission Control state so
+      // visitors see the full blueprint visualization on console.kubestellar.io
+      if (isDemoMode()) return getDemoMissionControlState()
+      return null
+    }
     const entry = JSON.parse(raw) as PersistedStateEntry | Partial<MissionControlState>
     // Support both new format (with savedAt timestamp) and legacy format (plain state)
     if ('savedAt' in entry && typeof entry.savedAt === 'number') {
       // Check TTL — discard wizard state older than WIZARD_STATE_TTL_MS
       if (Date.now() - entry.savedAt > WIZARD_STATE_TTL_MS) {
         localStorage.removeItem(STORAGE_KEY)
+        if (isDemoMode()) return getDemoMissionControlState()
         return null
       }
-      return entry.state
+      // In demo mode, replace empty/default persisted state with demo data
+      const s = entry.state
+      if (isDemoMode() && (!s?.projects || s.projects.length === 0)) {
+        return getDemoMissionControlState()
+      }
+      return s
     }
     // Legacy format — no expiry info, return as-is
-    return entry as Partial<MissionControlState>
+    const legacy = entry as Partial<MissionControlState>
+    if (isDemoMode() && (!legacy.projects || legacy.projects.length === 0)) {
+      return getDemoMissionControlState()
+    }
+    return legacy
   } catch {
     return null
   }
@@ -109,16 +126,80 @@ export function extractJSON<T>(text: string, requiredKey?: string): T | null {
   }
   if (candidates.length > 0) return candidates[0]
 
-  // Try raw JSON (starts with { or [)
-  const rawMatch = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])/)
-  if (rawMatch) {
+  // Try raw JSON — find all top-level { ... } or [ ... ] blocks by scanning
+  // for balanced braces, then return the last valid (and largest) parse.
+  // This avoids the old greedy regex which grabbed from the first { to the
+  // last } and failed when prose contained intermediate braces.  (#5505)
+  const blocks = extractBalancedBlocks(text)
+  let best: T | null = null
+  let bestLen = 0
+  for (const block of blocks) {
     try {
-      return JSON.parse(rawMatch[1]) as T
+      const parsed = JSON.parse(block) as T
+      if (requiredKey && typeof parsed === 'object' && parsed !== null && requiredKey in parsed) {
+        return parsed
+      }
+      if (block.length > bestLen) {
+        best = parsed
+        bestLen = block.length
+      }
     } catch {
-      // fall through
+      // skip unparseable blocks
     }
   }
-  return null
+  return best
+}
+
+/**
+ * Scan `text` for top-level balanced `{ ... }` and `[ ... ]` blocks.
+ * Returns them in order of appearance.  Handles nested braces correctly so
+ * `{ "a": { "b": 1 } }` is returned as one block, not two.
+ */
+function extractBalancedBlocks(text: string): string[] {
+  const results: string[] = []
+  const openers = new Set(['{', '['])
+  const closerFor: Record<string, string> = { '{': '}', '[': ']' }
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (!openers.has(ch)) continue
+
+    const expected = closerFor[ch]
+    let depth = 1
+    let j = i + 1
+    let inString = false
+    let escape = false
+
+    while (j < text.length && depth > 0) {
+      const c = text[j]
+      if (escape) {
+        escape = false
+        j++
+        continue
+      }
+      if (c === '\\' && inString) {
+        escape = true
+        j++
+        continue
+      }
+      if (c === '"') {
+        inString = !inString
+        j++
+        continue
+      }
+      if (!inString) {
+        if (c === ch) depth++
+        else if (c === expected) depth--
+      }
+      j++
+    }
+
+    if (depth === 0) {
+      results.push(text.substring(i, j))
+      i = j - 1 // skip past this block
+    }
+  }
+  return results
 }
 
 // ---------------------------------------------------------------------------
@@ -174,8 +255,7 @@ export function useMissionControl() {
         lastParsedContentRef.current = latest.content
         setState((prev) => ({
           ...prev,
-          projects: mergeProjects(prev.projects, normalized),
-          aiStreaming: false }))
+          projects: mergeProjects(prev.projects, normalized) }))
       }
     } else if (state.phase === 'assign') {
       const parsed = extractJSON<{
@@ -194,8 +274,7 @@ export function useMissionControl() {
           return {
             ...prev,
             assignments: [...aiAssignments, ...preserved],
-            phases: parsed.phases ?? prev.phases,
-            aiStreaming: false }
+            phases: parsed.phases ?? prev.phases }
         })
       }
     }
@@ -208,7 +287,22 @@ export function useMissionControl() {
     if (isStreaming !== state.aiStreaming) {
       setState((prev) => ({ ...prev, aiStreaming: isStreaming }))
     }
-  }, [planningMission?.status])
+  }, [planningMission?.status, state.aiStreaming])
+
+  // Safety-net: clear aiStreaming if no planning mission appears within 30s (#5669).
+  // This handles the case where startMission() was called but no AI provider is configured,
+  // so planningMission never transitions to 'running' and the UI stays stuck.
+  const AI_SUGGEST_TIMEOUT_MS = 30_000
+  useEffect(() => {
+    if (!state.aiStreaming) return
+    const timer = setTimeout(() => {
+      setState((prev) => {
+        if (!prev.aiStreaming) return prev
+        return { ...prev, aiStreaming: false }
+      })
+    }, AI_SUGGEST_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [state.aiStreaming])
 
   // ---------------------------------------------------------------------------
   // Reconcile assignments when projects change (cascade Phase 1 → 2 → 3)
@@ -396,7 +490,7 @@ Include real CNCF projects only. Consider dependencies between projects.`
   // ---------------------------------------------------------------------------
 
   const askAIForAssignments = (projects: PayloadProject[], clustersJson: string) => {
-      if (!state.planningMissionId) return
+      let missionId = stateRef.current.planningMissionId
 
       const prompt = `The user selected these projects for deployment:
 ${JSON.stringify(projects.map((p) => ({ name: p.name, displayName: p.displayName, category: p.category, dependencies: p.dependencies, priority: p.priority })), null, 2)}
@@ -447,8 +541,22 @@ Return a JSON block:
 
 Order phases by dependency — prerequisites first. Each phase completes before the next starts.`
 
-      sendMessage(state.planningMissionId, prompt)
-      setState((prev) => ({ ...prev, aiStreaming: true }))
+      // If no planning mission exists (user went manual on Phase 1), start one
+      // so the AI assign button is not silently a no-op (#5502)
+      if (!missionId) {
+        missionId = startMission({
+          title: 'Mission Control Planning',
+          description: 'AI-assisted cluster assignment',
+          type: 'custom',
+          initialPrompt: prompt })
+        setState((prev) => ({
+          ...prev,
+          planningMissionId: missionId,
+          aiStreaming: true }))
+      } else {
+        sendMessage(missionId, prompt)
+        setState((prev) => ({ ...prev, aiStreaming: true }))
+      }
     }
 
   /** Move a project from one cluster to another (for drag-and-drop in blueprint) */
@@ -478,7 +586,10 @@ Order phases by dependency — prerequisites first. Each phase completes before 
           assignments[idx] = {
             ...existing,
             projectNames: assigned
-              ? [...existing.projectNames, projectName]
+              // Deduplicate: only add if not already present (#5503)
+              ? existing.projectNames.includes(projectName)
+                ? existing.projectNames
+                : [...existing.projectNames, projectName]
               : existing.projectNames.filter((n) => n !== projectName) }
         } else if (assigned) {
           assignments.push({
@@ -581,9 +692,7 @@ Order phases by dependency — prerequisites first. Each phase completes before 
     for (const project of state.projects) {
       const pName = project.name.toLowerCase()
       for (const [clusterName, names] of clusterNames) {
-        const found = Array.from(names).some(n =>
-          n === pName || n.includes(pName) || pName.includes(n)
-        )
+        const found = names.has(pName)
         if (found) {
           installed.add(project.name)
           if (!perCluster.has(project.name)) perCluster.set(project.name, new Set())
@@ -591,8 +700,24 @@ Order phases by dependency — prerequisites first. Each phase completes before 
         }
       }
     }
+    // In demo mode, seed some projects as already installed to show the
+    // mixed installed/new-deploy visual in the Flight Plan blueprint
+    if (isDemoMode() && installed.size === 0 && state.projects.length > 0) {
+      // Prometheus and cert-manager are "already installed" on the first cluster
+      for (const name of ['prometheus', 'cert-manager']) {
+        if (state.projects.some(p => p.name === name)) {
+          installed.add(name)
+          const firstCluster = state.assignments[0]?.clusterName
+          if (firstCluster) {
+            if (!perCluster.has(name)) perCluster.set(name, new Set())
+            perCluster.get(name)!.add(firstCluster)
+          }
+        }
+      }
+    }
+
     return { installedProjects: installed, installedOnCluster: perCluster }
-  }, [helmReleases, clusters, state.projects])
+  }, [helmReleases, clusters, state.projects, state.assignments])
 
   // ---------------------------------------------------------------------------
   // Auto-assign: deterministic local algorithm (no AI)

@@ -48,6 +48,7 @@ type MultiClusterClient struct {
 	watcher         *fsnotify.Watcher
 	stopWatch       chan struct{}
 	onReload        func()               // Callback when config is reloaded
+	onWatchError    func(error)          // Callback when watchLoop encounters an error (#5569)
 	inClusterConfig *rest.Config         // In-cluster config when running inside k8s
 	inClusterName   string               // Detected friendly name for in-cluster (e.g. "fmaas-vllm-d")
 	slowClusters    map[string]time.Time // clusters that recently timed out (reduced timeout)
@@ -752,6 +753,68 @@ func (m *MultiClusterClient) LoadConfig() error {
 	return nil
 }
 
+// RemoveContext deletes a context (and its associated cluster/user entries if
+// they are not shared by other contexts) from the kubeconfig file (#5658).
+func (m *MultiClusterClient) RemoveContext(contextName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	config, err := clientcmd.LoadFromFile(m.kubeconfig)
+	if err != nil {
+		return fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+
+	ctx, ok := config.Contexts[contextName]
+	if !ok {
+		return fmt.Errorf("context %q not found", contextName)
+	}
+
+	// Don't allow removing the current context
+	if config.CurrentContext == contextName {
+		return fmt.Errorf("cannot remove the current context %q", contextName)
+	}
+
+	clusterName := ctx.Cluster
+	userName := ctx.AuthInfo
+
+	// Remove the context
+	delete(config.Contexts, contextName)
+
+	// Check if the cluster/user are still referenced by other contexts
+	clusterUsed := false
+	userUsed := false
+	for _, c := range config.Contexts {
+		if c.Cluster == clusterName {
+			clusterUsed = true
+		}
+		if c.AuthInfo == userName {
+			userUsed = true
+		}
+	}
+	if !clusterUsed {
+		delete(config.Clusters, clusterName)
+	}
+	if !userUsed {
+		delete(config.AuthInfos, userName)
+	}
+
+	// Write back
+	if err := clientcmd.WriteToFile(*config, m.kubeconfig); err != nil {
+		return fmt.Errorf("failed to write kubeconfig: %w", err)
+	}
+
+	// Clear cached clients for the removed context
+	delete(m.clients, contextName)
+	delete(m.dynamicClients, contextName)
+	delete(m.configs, contextName)
+	delete(m.healthCache, contextName)
+	delete(m.cacheTime, contextName)
+
+	m.rawConfig = config
+	slog.Info("Removed kubeconfig context", "context", contextName)
+	return nil
+}
+
 // StartWatching starts watching the kubeconfig file for changes.
 // Uses fsnotify for instant detection plus a polling fallback every 5s
 // to catch changes that fsnotify misses (common on macOS after atomic writes).
@@ -788,6 +851,12 @@ func (m *MultiClusterClient) reloadAndNotify() {
 	slog.Info("Kubeconfig changed, reloading...")
 	if err := m.LoadConfig(); err != nil {
 		slog.Error("error reloading kubeconfig", "error", err)
+		m.mu.RLock()
+		errCallback := m.onWatchError
+		m.mu.RUnlock()
+		if errCallback != nil {
+			errCallback(err)
+		}
 		return
 	}
 	slog.Info("Kubeconfig reloaded successfully")
@@ -887,6 +956,14 @@ func (m *MultiClusterClient) SetOnReload(callback func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onReload = callback
+}
+
+// SetOnWatchError sets a callback invoked when the kubeconfig watcher encounters
+// an error (e.g., reload failure). Allows callers to monitor watcher health (#5569).
+func (m *MultiClusterClient) SetOnWatchError(callback func(error)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onWatchError = callback
 }
 
 // ListClusters returns all clusters from kubeconfig

@@ -5,6 +5,9 @@ on:
     - cron: '30 6 * * *'  # 6:30 AM UTC daily
   workflow_dispatch: {}
 
+# Least-privilege: read-only by default; jobs declare write scopes individually
+permissions: read-all
+
 concurrency:
   group: playwright-nightly-${{ github.run_id }}
   cancel-in-progress: false
@@ -25,7 +28,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
@@ -62,7 +65,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 

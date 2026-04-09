@@ -5,7 +5,7 @@
  * collapsing, configuration modal, and last updated timestamp.
  */
 
-import { useState, useMemo } from 'react'
+import { useState, useEffect } from 'react'
 import { Activity, ChevronDown, ChevronRight, Settings, FlaskConical } from 'lucide-react'
 import { Button } from '../../../components/ui/Button'
 import { StatusBadge } from '../../../components/ui/StatusBadge'
@@ -85,10 +85,11 @@ export function UnifiedStatsSection({
   }
 
   // Load custom blocks on mount
-  useMemo(() => {
+  useEffect(() => {
     try {
       const saved = localStorage.getItem(`${storageKey}-blocks`)
       if (saved) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setCustomBlocks(JSON.parse(saved))
       }
     } catch {
@@ -239,10 +240,10 @@ function StatsConfigModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-modal flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={onClose}
       />
 

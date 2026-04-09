@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { CheckCircle, AlertTriangle, XCircle, Clock, ChevronRight, Server } from 'lucide-react'
+import { CheckCircle, AlertTriangle, XCircle, Clock, ChevronRight, Server, Package } from 'lucide-react'
 import { useClusters } from '../../hooks/useMCP'
 import { useCachedHelmReleases } from '../../hooks/useCachedData'
 import { useDrillDownActions } from '../../hooks/useDrillDown'
 import { Skeleton } from '../ui/Skeleton'
 import { ClusterBadge } from '../ui/ClusterBadge'
-import { CardSearchInput, CardControlsRow, CardPaginationFooter, CardAIActions } from '../../lib/cards/CardComponents'
+import { CardSearchInput, CardControlsRow, CardPaginationFooter, CardAIActions, CardEmptyState } from '../../lib/cards/CardComponents'
 import { useCardData } from '../../lib/cards/cardHooks'
 import { useCardLoadingState } from './CardDataContext'
 import { useTranslation } from 'react-i18next'
@@ -150,6 +150,21 @@ export function HelmReleaseStatus({ config }: HelmReleaseStatusProps) {
     }
   }
 
+  /** Static Tailwind class maps — dynamic interpolation like `text-${color}-400`
+   * doesn't work with Tailwind JIT content scanning (#5715). */
+  const STATUS_TEXT_CLASSES: Record<string, string> = {
+    green: 'text-green-400',
+    red: 'text-red-400',
+    blue: 'text-blue-400',
+    orange: 'text-orange-400',
+  }
+  const STATUS_BADGE_CLASSES: Record<string, string> = {
+    green: 'bg-green-500/20 text-green-400',
+    red: 'bg-red-500/20 text-red-400',
+    blue: 'bg-blue-500/20 text-blue-400',
+    orange: 'bg-orange-500/20 text-orange-400',
+  }
+
   const getStatusColor = (status: HelmReleaseDisplay['status']) => {
     switch (status) {
       case 'deployed': return 'green'
@@ -191,10 +206,11 @@ export function HelmReleaseStatus({ config }: HelmReleaseStatusProps) {
 
   if (showEmptyState) {
     return (
-      <div className="h-full flex flex-col items-center justify-center min-h-card text-muted-foreground">
-        <p className="text-sm">{t('helmReleaseStatus.noReleases')}</p>
-        <p className="text-xs mt-1">{t('helmReleaseStatus.installToTrack')}</p>
-      </div>
+      <CardEmptyState
+        icon={Package}
+        title={t('helmReleaseStatus.noReleases')}
+        message={t('helmReleaseStatus.installToTrack')}
+      />
     )
   }
 
@@ -247,8 +263,11 @@ export function HelmReleaseStatus({ config }: HelmReleaseStatusProps) {
       </div>
 
       {availableClusters.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-          {t('helmReleaseStatus.noClusters')}
+        <div className="flex-1 flex flex-col items-center justify-center text-center p-4">
+          <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center mb-2">
+            <Server className="w-5 h-5 text-muted-foreground" />
+          </div>
+          <p className="text-sm text-muted-foreground">{t('helmReleaseStatus.noClusters')}</p>
         </div>
       ) : (
         <>
@@ -294,7 +313,7 @@ export function HelmReleaseStatus({ config }: HelmReleaseStatusProps) {
           </div>
 
           {/* Releases list */}
-          <div ref={containerRef} className="flex-1 space-y-2 overflow-y-auto" style={containerStyle}>
+          <div ref={containerRef} className="flex-1 space-y-1.5 overflow-y-auto" style={containerStyle}>
             {releases.map((release, idx) => {
               const StatusIcon = getStatusIcon(release.status)
               const color = getStatusColor(release.status)
@@ -309,12 +328,12 @@ export function HelmReleaseStatus({ config }: HelmReleaseStatusProps) {
                     status: release.status,
                     revision: release.revision,
                     updated: release.updated })}
-                  className={`p-3 rounded-lg ${release.status === 'failed' ? 'bg-red-500/10 border border-red-500/20' : 'bg-secondary/30'} hover:bg-secondary/50 transition-colors cursor-pointer group`}
+                  className={`p-3 rounded-lg ${release.status === 'failed' ? 'bg-red-500/10 border border-red-500/20' : idx % 2 === 0 ? 'bg-secondary/20' : 'bg-secondary/40'} hover:bg-secondary/50 transition-colors cursor-pointer group`}
                   title={`${release.name} - ${release.chart}@${release.version} (Revision ${release.revision})`}
                 >
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2">
-                      <span title={`Status: ${release.status}`}><StatusIcon className={`w-4 h-4 text-${color}-400`} /></span>
+                      <span title={`Status: ${release.status}`}><StatusIcon className={`w-4 h-4 ${STATUS_TEXT_CLASSES[color]}`} /></span>
                       <span className="text-sm text-foreground font-medium group-hover:text-purple-400" title={release.name}>{release.name}</span>
                     </div>
                     <div className="flex items-center gap-2">
@@ -324,7 +343,7 @@ export function HelmReleaseStatus({ config }: HelmReleaseStatusProps) {
                           issues={[{ name: `Release ${release.status}`, message: `Helm release ${release.name} (chart: ${release.chart}@${release.version}) is in ${release.status} state` }]}
                         />
                       )}
-                      <span className={`text-xs px-1.5 py-0.5 rounded bg-${color}-500/20 text-${color}-400`} title={`Release status: ${release.status}`}>
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${STATUS_BADGE_CLASSES[color]}`} title={`Release status: ${release.status}`}>
                         {release.status}
                       </span>
                       <ChevronRight className="w-4 h-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />

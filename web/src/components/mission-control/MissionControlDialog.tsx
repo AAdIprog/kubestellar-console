@@ -75,7 +75,7 @@ export function MissionControlDialog({ open, onClose }: MissionControlDialogProp
   // Escape to close
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') { e.stopImmediatePropagation(); onClose() }
     },
     [onClose]
   )
@@ -109,7 +109,7 @@ export function MissionControlDialog({ open, onClose }: MissionControlDialogProp
   const isComplete = state.phase === 'complete'
 
   const canAdvance =
-    (state.phase === 'define' && state.projects.length > 0) ||
+    (state.phase === 'define' && state.projects.length > 0 && !state.aiStreaming) ||
     (state.phase === 'assign' && state.assignments.some((a) => a.projectNames.length > 0)) ||
     state.phase === 'blueprint'
 
@@ -128,6 +128,9 @@ export function MissionControlDialog({ open, onClose }: MissionControlDialogProp
 
   const handleNewMission = () => {
     mc.reset()
+    // Reset the stepper's "highest reached" state so only Phase 1 is
+    // reachable in the new mission (#5504)
+    setHighestReached(0)
   }
 
   /** Inset (in px) from viewport edges so the backdrop peeks through */
@@ -139,7 +142,7 @@ export function MissionControlDialog({ open, onClose }: MissionControlDialogProp
         <>
           {/* ── Backdrop ──────────────────────────────────────────── */}
           <motion.div
-            className="fixed inset-0 z-[199] bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 z-modal bg-black/60 backdrop-blur-sm"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -153,7 +156,7 @@ export function MissionControlDialog({ open, onClose }: MissionControlDialogProp
             role="dialog"
             aria-modal="true"
             aria-label={state.title || 'Mission Control'}
-            className="fixed z-[200] flex flex-col bg-background rounded-xl border border-border shadow-2xl shadow-black/30 overflow-hidden"
+            className="fixed z-modal flex flex-col bg-background rounded-xl border border-border shadow-2xl shadow-black/30 overflow-hidden"
             style={{
               inset: `${MODAL_INSET_PX}px`,
             }}

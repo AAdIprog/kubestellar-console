@@ -11,6 +11,7 @@ import {
   Loader2, ExternalLink, RefreshCw } from 'lucide-react'
 import { cn } from '../../lib/cn'
 import { api } from '../../lib/api'
+import { isDemoMode } from '../../lib/demoMode'
 import { useAuth } from '../../lib/auth'
 import { FETCH_EXTERNAL_TIMEOUT_MS } from '../../lib/constants/network'
 import { matchMissionsToCluster } from '../../lib/missions/matcher'
@@ -235,7 +236,7 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
         type: 'directory',
         source: 'github',
         loaded: false,
-        description: 'Production-tested Helm values from kubara-io/kubara',
+        description: isDemoMode() ? 'Demo catalog — install console locally for live data' : 'Production-tested Helm values from kubara-io/kubara',
         repoOwner: 'kubara-io',
         repoName: 'kubara' },
     ]
@@ -373,7 +374,14 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
   // Select a card mission — fetch full content on demand
   // ============================================================================
 
+  // Track the latest selection to prevent stale async responses from overwriting
+  const latestSelectionRef = useRef<string>('')
+
   const selectCardMission = async (mission: MissionExport) => {
+    // Use title + type as unique key (MissionExport has no id field)
+    const selectionKey = `${mission.title}::${mission.type}`
+    latestSelectionRef.current = selectionKey
+
     // Show index metadata immediately for instant feedback
     setSelectedMission(mission)
     setIsMissionLoading(true)
@@ -384,14 +392,19 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
     // Fetch full file content (steps, uninstall, upgrade, troubleshooting)
     try {
       const { mission: fullMission, raw } = await fetchMissionContent(mission)
-      // Only update if this mission is still selected (user might have navigated away)
-      setSelectedMission((current) => current?.title === mission.title ? fullMission : current)
-      setRawContent((current) => current === JSON.stringify(mission, null, 2) ? raw : current)
+      // Only update if this is still the latest selection (prevents race condition)
+      if (latestSelectionRef.current === selectionKey) {
+        setSelectedMission(fullMission)
+        setRawContent(raw)
+      }
     } catch {
-      // Keep the index metadata so basic info is still visible, but surface the error
-      setMissionContentError('Failed to load full mission content. Steps may be incomplete.')
+      if (latestSelectionRef.current === selectionKey) {
+        setMissionContentError('Failed to load full mission content. Steps may be incomplete.')
+      }
     } finally {
-      setIsMissionLoading(false)
+      if (latestSelectionRef.current === selectionKey) {
+        setIsMissionLoading(false)
+      }
     }
   }
 
@@ -468,31 +481,36 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
       return matched / slugWordSet.size
     }
 
+    /** Minimum score to permanently consume the deep-link ref (#5654) */
+    const HIGH_CONFIDENCE_THRESHOLD = 0.9
+
     /** Find best-scoring mission at or above threshold in a list */
-    const findBest = (list: MissionExport[], isInstaller: boolean): MissionExport | undefined => {
+    const findBest = (list: MissionExport[], isInstaller: boolean): { match?: MissionExport; score: number } => {
       let best: MissionExport | undefined
       let bestScore = MIN_WORD_OVERLAP_RATIO
       for (const m of list) {
         const score = scoreMission(m, isInstaller)
         if (score >= bestScore) { best = m; bestScore = score }
       }
-      return best
+      return { match: best, score: bestScore }
     }
 
     // Search installers first, then fixers
-    const installerMatch = findBest(installerMissions, true)
-    if (installerMatch) {
+    const installer = findBest(installerMissions, true)
+    if (installer.match) {
       setActiveTab('installers')
-      selectCardMission(installerMatch)
-      deepLinkSlugRef.current = null // consumed
+      selectCardMission(installer.match)
+      // Only consume ref for high-confidence matches — low-confidence matches
+      // may be superseded when more missions finish loading (#5654)
+      if (installer.score >= HIGH_CONFIDENCE_THRESHOLD) deepLinkSlugRef.current = null
       return
     }
 
-    const fixerMatch = findBest(fixerMissions, false)
-    if (fixerMatch) {
+    const fixer = findBest(fixerMissions, false)
+    if (fixer.match) {
       setActiveTab('fixes')
-      selectCardMission(fixerMatch)
-      deepLinkSlugRef.current = null // consumed
+      selectCardMission(fixer.match)
+      if (fixer.score >= HIGH_CONFIDENCE_THRESHOLD) deepLinkSlugRef.current = null
       return
     }
 
@@ -616,6 +634,34 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
               source: 'github' as const,
               loaded: false,
               description: r.full_name }))
+          } else if (isDemoMode() && (nodeId === 'kubara' || nodeId.startsWith('kubara/'))) {
+            // Demo mode: static Kubara catalog (cached, no API calls)
+            if (nodeId === 'kubara') {
+              children = [
+                'kube-prometheus-stack', 'cert-manager', 'kyverno', 'kyverno-policies',
+                'argo-cd', 'external-secrets', 'loki', 'longhorn', 'metallb', 'traefik',
+              ].map(name => ({
+                id: `kubara/${name}`,
+                name,
+                path: `go-binary/templates/embedded/managed-service-catalog/helm/${name}`,
+                type: 'directory' as const,
+                source: 'github' as const,
+                repoOwner: 'kubara-io',
+                repoName: 'kubara',
+                loaded: false,
+              }))
+            } else {
+              children = ['Chart.yaml', 'values.yaml', 'templates'].map(fname => ({
+                id: `${nodeId}/${fname}`,
+                name: fname,
+                path: `${node.path}/${fname}`,
+                type: (fname === 'templates' ? 'directory' : 'file') as TreeNode['type'],
+                source: 'github' as const,
+                repoOwner: 'kubara-io',
+                repoName: 'kubara',
+                loaded: fname !== 'templates',
+              }))
+            }
           } else {
             // Specific repo node — list repo contents via GitHub Contents API
             const repoPath = node.path
@@ -692,8 +738,6 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
           )
         } else if (node.source === 'github') {
           // Fetch repo contents via GitHub Contents API proxy
-          // If repoOwner/repoName are set (external sources like Kubara), use them
-          // Otherwise node.path is "owner/repo" or "owner/repo/subpath"
           const owner = node.repoOwner || node.path.split('/')[0]
           const repo = node.repoName || node.path.split('/')[1]
           const subPath = node.repoOwner ? node.path : node.path.split('/').slice(2).join('/')
@@ -728,8 +772,18 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
           )
           content = data
         } else if (node.source === 'github') {
+          // In demo mode for Kubara files, return demo content
+          if (isDemoMode() && node.id.startsWith('kubara/')) {
+            const chartName = node.id.split('/')[1] || 'chart'
+            if (node.name === 'Chart.yaml') {
+              content = `apiVersion: v2\nname: ${chartName}\ndescription: Production-tested ${chartName} Helm chart from Kubara\nversion: 1.0.0\ntype: application\nappVersion: "latest"\nmaintainers:\n  - name: kubara-io\n    url: https://github.com/kubara-io/kubara`
+            } else if (node.name === 'values.yaml') {
+              content = `# ${chartName} — Kubara production values\n# These values are tested in production environments\n# See https://github.com/kubara-io/kubara for details\n\nreplicaCount: 2\n\nresources:\n  requests:\n    cpu: 100m\n    memory: 128Mi\n  limits:\n    cpu: 500m\n    memory: 512Mi\n\nserviceAccount:\n  create: true\n\npodSecurityContext:\n  runAsNonRoot: true\n  fsGroup: 65534\n\nmonitoring:\n  enabled: true\n  serviceMonitor:\n    enabled: true`
+            } else {
+              content = `# ${node.name}\n# Kubara template file`
+            }
+          } else {
           // Fetch raw file content via GitHub Contents API proxy
-          // node.path is "owner/repo/filepath" — extract parts for the API call
           const parts = node.path.split('/')
           const owner = parts[0]
           const repo = parts[1]
@@ -747,6 +801,7 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
           } else {
             content = JSON.stringify(ghFile)
           }
+          }
         } else {
           return
         }
@@ -755,6 +810,13 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
         setRawContent(raw)
         setUnstructuredContent(null)
 
+        // External repo files (e.g., Kubara Helm charts) are not missions —
+        // show as raw YAML/content instead of trying to parse as a mission
+        if (node.repoOwner) {
+          const format = node.name.endsWith('.yaml') || node.name.endsWith('.yml') ? 'yaml' as const : 'markdown' as const
+          setUnstructuredContent({ content: raw, format, preview: { detectedTitle: node.name, detectedSections: [], detectedCommands: [], detectedYamlBlocks: 1, detectedApiGroups: [], totalLines: raw.split('\n').length }, detectedProjects: [] })
+          setSelectedMission(null)
+        } else {
         try {
           const parseResult = parseFileContent(raw, node.name)
           if (parseResult.type === 'structured') {
@@ -779,6 +841,7 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
           } catch {
             setSelectedMission(null)
           }
+        }
         }
       } catch {
         setRawContent(null)
@@ -1070,6 +1133,8 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // Stop the event from reaching the sidebar's Escape handler
+        e.stopImmediatePropagation()
         if (selectedMission) {
           setSelectedMission(null)
           setRawContent(null)
@@ -1099,7 +1164,7 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-2xl">
+    <div className="fixed inset-0 z-modal flex items-center justify-center bg-black/60 backdrop-blur-sm">
     <div className="w-[94vw] h-[90vh] bg-background rounded-xl shadow-2xl border border-border flex flex-col overflow-hidden">
       {/* ================================================================== */}
       {/* Top bar: search + filters */}
@@ -1171,7 +1236,7 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
 
       {/* Filter bar — constrained height on mobile with scroll */}
       {showFilters && (
-        <div className="px-4 py-2.5 bg-card border-b border-border space-y-2 max-h-[40vh] md:max-h-none overflow-y-auto">
+        <div className="px-4 py-2.5 bg-card border-b border-border space-y-2 max-h-[40vh] md:max-h-[50vh] overflow-y-auto">
           {/* Row 1: Clear all + Match % + Source + Category */}
           <div className="flex items-center gap-3 flex-wrap">
             {activeFilterCount > 0 && (
@@ -1905,7 +1970,7 @@ export function MissionBrowser({ isOpen, onClose, onImport, initialMission }: Mi
             {/* ============================================================ */}
             {/* FIXES TAB */}
             {/* ============================================================ */}
-            {!selectedMission && !unstructuredContent && filteredEntries.length === 0 && activeTab === 'fixes' && (
+            {!selectedMission && !unstructuredContent && activeTab === 'fixes' && (
               <div className="space-y-4">
                 {/* Fixer filters */}
                 <div className="flex flex-wrap items-center gap-2">

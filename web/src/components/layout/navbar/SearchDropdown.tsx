@@ -88,7 +88,7 @@ function SearchResultsPanel({
   let flatIndex = 0
 
   return (
-    <div className="absolute top-full left-0 right-0 mt-2 bg-card border border-border rounded-lg shadow-xl overflow-hidden z-[60]">
+    <div className="absolute top-full left-0 right-0 mt-2 bg-card border border-border rounded-lg shadow-xl overflow-hidden z-dropdown">
       {flatResults.length > 0 ? (
         <div ref={resultsRef} className="py-1 max-h-96 overflow-y-auto">
           {CATEGORY_ORDER.map(cat => {
@@ -318,6 +318,10 @@ export function SearchDropdown() {
   // Keyboard navigation
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Skip if this instance's container is not visible — prevents duplicate
+      // handlers when SearchDropdown is mounted in both desktop and mobile slots (#5711)
+      if (searchRef.current && searchRef.current.offsetParent === null) return
+
       // Open search with Cmd+K
       if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
         event.preventDefault()
